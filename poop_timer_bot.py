@@ -1,15 +1,5 @@
 """
-💩 Воздухан-бот
-===============
-Запускает таймер через inline-кнопки (1 / 3 / 5 / 10 минут).
-Если запустивший не успевает нажать «Завершить» — бот пишет в чат
-«воздухан» и упоминает его.
-
-Установка:
-    pip install "python-telegram-bot==20.*"
-
-Запуск:
-    BOT_TOKEN=<твой_токен> python poop_timer_bot.py
+💩 Воздухан-бот v2
 """
 
 import asyncio
@@ -18,12 +8,7 @@ import os
 from typing import Optional
 
 from telegram import Update, Message, InlineKeyboardButton, InlineKeyboardMarkup, User
-from telegram.ext import (
-    Application,
-    CommandHandler,
-    CallbackQueryHandler,
-    ContextTypes,
-)
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 from telegram.constants import ParseMode
 
 logging.basicConfig(
@@ -32,35 +17,25 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Константы
-# ──────────────────────────────────────────────────────────────────────────────
 TIMER_OPTIONS   = [1, 3, 5, 10]
 CALLBACK_PREFIX = "timer_start:"
 CALLBACK_DONE   = "timer_done"
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Состояние чатов
-# ──────────────────────────────────────────────────────────────────────────────
 class TimerState:
     def __init__(self, timer_message: Message, minutes: int, starter: User):
         self.timer_message = timer_message
         self.minutes       = minutes
-        self.starter       = starter          # объект User того, кто запустил
+        self.starter       = starter
         self.task: Optional[asyncio.Task] = None
-        self.finished      = False            # True = нажал «Завершить» вовремя
+        self.finished      = False
 
 active_timers: dict[int, TimerState] = {}
 
-# ──────────────────────────────────────────────────────────────────────────────
-# UI-хелперы
-# ──────────────────────────────────────────────────────────────────────────────
 def fmt_time(seconds: int) -> str:
     m, s = divmod(max(0, seconds), 60)
     return f"{m}:{s:02d}"
 
 def mention(user: User) -> str:
-    """HTML-упоминание пользователя."""
     return f'<a href="tg://user?id={user.id}">{user.full_name}</a>'
 
 def timer_keyboard() -> InlineKeyboardMarkup:
@@ -76,9 +51,6 @@ def done_keyboard() -> InlineKeyboardMarkup:
         [[InlineKeyboardButton("✅ Завершить", callback_data=CALLBACK_DONE)]]
     )
 
-# ──────────────────────────────────────────────────────────────────────────────
-# /start и /timer
-# ──────────────────────────────────────────────────────────────────────────────
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "👋 Привет! Я Воздухан-бот.\n\n"
@@ -92,18 +64,13 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_timer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     if chat_id in active_timers:
-        await update.message.reply_text(
-            "⏳ Таймер уже идёт! Дождись окончания."
-        )
+        await update.message.reply_text("⏳ Таймер уже идёт! Дождись окончания.")
         return
     await update.message.reply_text(
         "⏱ Выбери длительность таймера:",
         reply_markup=timer_keyboard(),
     )
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Обработчик кнопок
-# ──────────────────────────────────────────────────────────────────────────────
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -111,14 +78,12 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     data    = query.data
 
-    # ── «Завершить» ─────────────────────────────────────────────────────────
     if data == CALLBACK_DONE:
         state = active_timers.get(chat_id)
         if not state:
             await query.edit_message_text("❌ Таймер уже не активен.")
             return
 
-        # Только тот, кто запустил, может завершить
         if query.from_user.id != state.starter.id:
             await query.answer(
                 "Только тот, кто запустил таймер, может его завершить!",
@@ -138,7 +103,6 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # ── Выбор длительности ───────────────────────────────────────────────────
     if data.startswith(CALLBACK_PREFIX):
         if chat_id in active_timers:
             await query.answer("⏳ Таймер уже запущен!", show_alert=True)
@@ -168,9 +132,6 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             countdown_task(chat_id, total_sec, context.application)
         )
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Фоновый обратный отсчёт
-# ──────────────────────────────────────────────────────────────────────────────
 async def countdown_task(chat_id: int, total_sec: int, app: Application):
     state = active_timers.get(chat_id)
     if not state:
@@ -184,7 +145,6 @@ async def countdown_task(chat_id: int, total_sec: int, app: Application):
             await asyncio.sleep(UPDATE_INTERVAL)
             elapsed += UPDATE_INTERVAL
 
-            # Таймер мог быть завершён нажатием кнопки
             if state.finished or chat_id not in active_timers:
                 return
 
@@ -205,21 +165,14 @@ async def countdown_task(chat_id: int, total_sec: int, app: Application):
     except asyncio.CancelledError:
         return
 
-    # Время вышло и никто не нажал «Завершить»
     if not state.finished and chat_id in active_timers:
         await expire_timer(chat_id, app)
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Время вышло — позор!
-# ──────────────────────────────────────────────────────────────────────────────
 async def expire_timer(chat_id: int, app: Application):
     state = active_timers.pop(chat_id, None)
     if not state:
         return
 
-    bot = app.bot
-
-    # Убираем кнопку с истёкшего сообщения
     try:
         await state.timer_message.edit_text(
             "⏰ <b>Время вышло!</b>",
@@ -228,8 +181,7 @@ async def expire_timer(chat_id: int, app: Application):
     except Exception:
         pass
 
-    # Отправляем сообщение позора
-    await bot.send_message(
+    await app.bot.send_message(
         chat_id=chat_id,
         text=(
             f"💨 <b>ВОЗДУХАН!</b>\n\n"
@@ -239,24 +191,19 @@ async def expire_timer(chat_id: int, app: Application):
         parse_mode=ParseMode.HTML,
         reply_to_message_id=state.timer_message.message_id,
     )
-    logger.info("💨 Воздухан: user %s в чате %s", state.starter.id, chat_id)
 
-# ──────────────────────────────────────────────────────────────────────────────
-# main
-# ──────────────────────────────────────────────────────────────────────────────
 def main():
     token = os.environ.get("BOT_TOKEN")
     if not token:
         raise RuntimeError("Укажи BOT_TOKEN через переменную окружения.")
 
     app = Application.builder().token(token).build()
-
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("timer", cmd_timer))
     app.add_handler(CallbackQueryHandler(callback_handler))
 
     logger.info("🚀 Воздухан-бот запущен")
-    app.run_polling(allowed_updates=Update.ALL_TYPES)
+    app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
     main()

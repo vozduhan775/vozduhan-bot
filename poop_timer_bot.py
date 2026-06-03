@@ -3,154 +3,131 @@ import logging
 import os
 from typing import Optional
 
-from telegram import Update, Message, InlineKeyboardButton, InlineKeyboardMarkup, User
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
-from telegram.constants import ParseMode
 
-logging.basicConfig(
-    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
-    level=logging.INFO,
-)
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-TIMER_OPTIONS   = [1, 3, 5, 10]
-CALLBACK_PREFIX = "timer_start:"
-CALLBACK_DONE   = "timer_done"
+TIMER_OPTIONS = [1, 3, 5, 10]
+CALLBACK_PREFIX = "ts:"
+CALLBACK_DONE = "td"
 
 class TimerState:
-    def __init__(self, timer_message: Message, minutes: int, starter: User):
-        self.timer_message = timer_message
-        self.minutes       = minutes
-        self.starter       = starter
-        self.task: Optional[asyncio.Task] = None
-        self.finished      = False
+    def __init__(self, msg, minutes, starter_id, starter_name):
+        self.msg = msg
+        self.minutes = minutes
+        self.starter_id = starter_id
+        self.starter_name = starter_name
+        self.task = None
+        self.finished = False
 
-active_timers: dict[int, TimerState] = {}
+active_timers = {}
 
-def fmt_time(seconds: int) -> str:
-    m, s = divmod(max(0, seconds), 60)
+def fmt(sec):
+    m, s = divmod(max(0, sec), 60)
     return f"{m}:{s:02d}"
 
-def mention(user: User) -> str:
-    return f'<a href="tg://user?id={user.id}">{user.full_name}</a>'
+def mention(uid, name):
+    return f'<a href="tg://user?id={uid}">{name}</a>'
 
-def timer_keyboard() -> InlineKeyboardMarkup:
-    buttons = [
-        InlineKeyboardButton(f"⏱ {m} мин.", callback_data=f"{CALLBACK_PREFIX}{m}")
-        for m in TIMER_OPTIONS
-    ]
-    rows = [buttons[i:i+2] for i in range(0, len(buttons), 2)]
-    return InlineKeyboardMarkup(rows)
+def timer_kb():
+    btns = [InlineKeyboardButton(f"⏱ {m} мин.", callback_data=f"{CALLBACK_PREFIX}{m}") for m in TIMER_OPTIONS]
+    return InlineKeyboardMarkup([btns[:2], btns[2:]])
 
-def done_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        [[InlineKeyboardButton("✅ Завершить", callback_data=CALLBACK_DONE)]]
-    )
+def done_kb():
+    return InlineKeyboardMarkup([[InlineKeyboardButton("✅ Завершить", callback_data=CALLBACK_DONE)]])
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "👋 Привет! Я Воздухан-бот.\n\n"
-        "Запусти таймер и успей нажать Завершить до конца.\n"
-        "Не успел — бот напишет воздухан и тегнет тебя!\n\n"
-        "Выбери длительность:",
-        reply_markup=timer_keyboard(),
+        "👋 Воздухан-бот!\n\nЗапусти таймер и успей нажать Завершить.\nНе успел — получишь звание воздухан!\n\nВыбери длительность:",
+        reply_markup=timer_kb()
     )
 
 async def cmd_timer(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = update.effective_chat.id
-    if chat_id in active_timers:
-        await update.message.reply_text("Таймер уже идёт! Дождись окончания.")
+    if update.effective_chat.id in active_timers:
+        await update.message.reply_text("Таймер уже идёт!")
         return
-    await update.message.reply_text(
-        "Выбери длительность таймера:",
-        reply_markup=timer_keyboard(),
-    )
+    await update.message.reply_text("Выбери длительность:", reply_markup=timer_kb())
 
-async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
+async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
     chat_id = update.effective_chat.id
-    data = query.data
 
-    if data == CALLBACK_DONE:
+    if q.data == CALLBACK_DONE:
         state = active_timers.get(chat_id)
         if not state:
-            await query.edit_message_text("Таймер уже не активен.")
+            await q.edit_message_text("Таймер уже не активен.")
             return
-        if query.from_user.id != state.starter.id:
-            await query.answer("Только тот кто запустил может завершить!", show_alert=True)
+        if q.from_user.id != state.starter_id:
+            await q.answer("Только тот кто запустил может завершить!", show_alert=True)
             return
         state.finished = True
         if state.task:
             state.task.cancel()
         active_timers.pop(chat_id, None)
-        await query.edit_message_text(
-            f"{mention(state.starter)} успел вовремя. Красавчик! 💪",
-            parse_mode=ParseMode.HTML,
+        await q.edit_message_text(
+            f"✅ {mention(state.starter_id, state.starter_name)} успел вовремя. Красавчик! 💪",
+            parse_mode="HTML"
         )
         return
 
-    if data.startswith(CALLBACK_PREFIX):
+    if q.data.startswith(CALLBACK_PREFIX):
         if chat_id in active_timers:
-            await query.answer("Таймер уже запущен!", show_alert=True)
+            await q.answer("Таймер уже запущен!", show_alert=True)
             return
-        minutes = int(data.removeprefix(CALLBACK_PREFIX))
-        total_sec = minutes * 60
-        starter = query.from_user
-        await query.edit_message_text(
-            f"Таймер запущен на {minutes} мин.!\n\n"
-            f"Запустил: {mention(starter)}\n\n"
-            f"Осталось: {fmt_time(total_sec)}\n\n"
-            f"Нажми Завершить до истечения времени, иначе получишь звание воздухан!",
-            parse_mode=ParseMode.HTML,
-            reply_markup=done_keyboard(),
+        minutes = int(q.data[len(CALLBACK_PREFIX):])
+        total = minutes * 60
+        sid = q.from_user.id
+        sname = q.from_user.full_name
+        await q.edit_message_text(
+            f"⏱ Таймер на {minutes} мин!\n\nЗапустил: {mention(sid, sname)}\n\n⏳ Осталось: {fmt(total)}\n\nНажми Завершить иначе воздухан!",
+            parse_mode="HTML",
+            reply_markup=done_kb()
         )
-        state = TimerState(timer_message=query.message, minutes=minutes, starter=starter)
+        state = TimerState(q.message, minutes, sid, sname)
         active_timers[chat_id] = state
-        state.task = asyncio.create_task(
-            countdown_task(chat_id, total_sec, context.application)
-        )
+        state.task = asyncio.create_task(tick(chat_id, total, context.application))
 
-async def countdown_task(chat_id: int, total_sec: int, app: Application):
+async def tick(chat_id, total, app):
     state = active_timers.get(chat_id)
     if not state:
         return
     elapsed = 0
     try:
-        while elapsed < total_sec:
+        while elapsed < total:
             await asyncio.sleep(15)
             elapsed += 15
             if state.finished or chat_id not in active_timers:
                 return
-            remaining = total_sec - elapsed
+            rem = total - elapsed
             try:
-                await state.timer_message.edit_text(
-                    f"Таймер идёт!\n\nЗапустил: {mention(state.starter)}\n\n"
-                    f"Осталось: {fmt_time(remaining)}\n\n"
-                    f"Нажми Завершить до истечения времени, иначе воздухан!",
-                    parse_mode=ParseMode.HTML,
-                    reply_markup=done_keyboard(),
+                await state.msg.edit_text(
+                    f"⏱ Таймер идёт!\n\nЗапустил: {mention(state.starter_id, state.starter_name)}\n\n⏳ Осталось: {fmt(rem)}\n\nНажми Завершить иначе воздухан!",
+                    parse_mode="HTML",
+                    reply_markup=done_kb()
                 )
             except Exception as e:
-                logger.warning("edit_text failed: %s", e)
+                logger.warning(e)
     except asyncio.CancelledError:
         return
     if not state.finished and chat_id in active_timers:
-        await expire_timer(chat_id, app)
+        await shame(chat_id, app)
 
-async def expire_timer(chat_id: int, app: Application):
+async def shame(chat_id, app):
     state = active_timers.pop(chat_id, None)
     if not state:
         return
     try:
-        await state.timer_message.edit_text("Время вышло!")
+        await state.msg.edit_text("⏰ Время вышло!")
     except Exception:
         pass
     await app.bot.send_message(
         chat_id=chat_id,
-        text=f"ВОЗДУХАН!\n\n{mention(state.starter)} не успел завершить таймер.\n\nПоздравляем с заслуженным званием воздухана чата! 🏆",
-        parse_mode=ParseMode.HTML,
-        reply_to_message_id=state.timer_message.message_id,
+        text=f"💨 ВОЗДУХАН!\n\n{mention(state.starter_id, state.starter_name)} не успел завершить таймер.\n\nПоздравляем с заслуженным званием воздухана чата! 🏆",
+        parse_mode="HTML",
+        reply_to_message_id=state.msg.message_id
     )
 
 def main():
@@ -160,7 +137,7 @@ def main():
     app = Application.builder().token(token).build()
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("timer", cmd_timer))
-    app.add_handler(CallbackQueryHandler(callback_handler))
+    app.add_handler(CallbackQueryHandler(on_button))
     logger.info("Бот запущен")
     app.run_polling(drop_pending_updates=True)
 

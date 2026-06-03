@@ -116,7 +116,7 @@ def main():
     offset = 0
     while True:
         try:
-            r = requests.get(f"{API}/getUpdates", params={"timeout": 30, "offset": offset}, timeout=35)
+            r = requests.get(f"{API}/getUpdates", params={"timeout": 5, "offset": offset}, timeout=10)
             updates = r.json().get("result", [])
             for u in updates:
                 offset = u["update_id"] + 1
@@ -126,7 +126,7 @@ def main():
                     handle_callback(u["callback_query"])
         except Exception as e:
             print(f"Ошибка: {e}")
-            time.sleep(5)
+            time.sleep(3)
 
 if __name__ == "__main__":
     main()
